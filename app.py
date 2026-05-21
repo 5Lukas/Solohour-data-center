@@ -11,10 +11,9 @@ import os
 st.set_page_config(page_title="数据流转中台", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 🛡️ 网页安全密码锁
+# 🛡️ 网页安全密码锁 (云端 Secrets 加密版)
 # ==========================================
-# 在这里设置你的团队专属密码
-TEAM_PASSWORD = "solohour2026" 
+TEAM_PASSWORD = st.secrets.get("WEB_PASSWORD", "PROTECTED_STREAMLIT_APP_LOCK_999")
 
 def check_password():
     if "password_correct" not in st.session_state:
@@ -34,12 +33,11 @@ def check_password():
         return False
     return True
 
-# 如果密码不对，直接阻断下方所有代码运行
 if not check_password():
     st.stop()
 
 # ==========================================
-# 存储引擎 (本地 JSON) - 🛡️ 已剥离敏感信息
+# 存储引擎 (本地 JSON) - 已隔离敏感 Token 存储
 # ==========================================
 CONFIG_FILE = "seatable_etl_config.json"
 
@@ -60,7 +58,6 @@ if 'db_config' not in st.session_state:
 
 def get_current_state():
     state = {
-        # ⚠️ 安全警告：绝对不要在这里保存 read_token 和 write_token！
         "target_table": st.session_state.get("target_table_name", "Table1"),
         "table_names": [st.session_state.get(f"tbl_input_{i}", "") for i in range(st.session_state.num_tables)],
         "mappings": [],
@@ -74,7 +71,6 @@ def get_current_state():
         state["mappings"].append(m_dict)
     for v in range(st.session_state.num_vlookups):
         state["vlookups"].append({
-            # ⚠️ 不保存外部 Token
             "table": st.session_state.get(f"vtbl_{v}", ""),
             "main_key": st.session_state.get(f"vmk_{v}", ""),
             "ref_key": st.session_state.get(f"vrk_{v}", ""),
@@ -142,7 +138,15 @@ ls = st.session_state.get("loaded_state", st.session_state.db_config.get("last_u
 # ==========================================
 # 前端 UI 与排版渲染
 # ==========================================
-st.markdown("<style>.step-header { padding: 10px 15px; border-radius: 8px; font-weight: 600; font-size: 1.2rem; margin: 15px 0 10px 0; color: #333; } .bg-merge { background-color: #E3F2FD; border-left: 5px solid #2196F3; } .bg-vlookup { background-color: #E8F5E9; border-left: 5px solid #4CAF50; } .bg-transform { background-color: #FFF3E0; border-left: 5px solid #FF9800; } .bg-execute { background-color: #F3E5F5; border-left: 5px solid #9C27B0; }</style>", unsafe_allow_html=True)
+st.markdown("""
+<style>
+    .step-header { padding: 10px 15px; border-radius: 8px; font-weight: 600; font-size: 1.2rem; margin: 15px 0 10px 0; color: #333; } 
+    .bg-merge { background-color: #E3F2FD; border-left: 5px solid #2196F3; } 
+    .bg-vlookup { background-color: #E8F5E9; border-left: 5px solid #4CAF50; } 
+    .bg-transform { background-color: #FFF3E0; border-left: 5px solid #FF9800; } 
+    .bg-execute { background-color: #F3E5F5; border-left: 5px solid #9C27B0; }
+</style>
+""", unsafe_allow_html=True)
 
 st.sidebar.markdown("### 💾 配置存档中心")
 template_names = ["-- 选择配置模板 --"] + list(st.session_state.db_config["templates"].keys())
@@ -157,14 +161,19 @@ if st.sidebar.button("💾 存档当前配置", use_container_width=True):
     if new_tpl_name.strip():
         st.session_state.db_config["templates"][new_tpl_name.strip()] = get_current_state()
         save_config(st.session_state.db_config)
-        st.sidebar.success("🎉 配置存档成功！(已过滤所有敏感 Token)")
+        st.sidebar.success("🎉 配置存档成功！(已隔离敏感 Token)")
         time.sleep(0.5)
         st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔌 API 核心配置")
-read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value="", type="password", key="read_token")
-write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value="", type="password", key="write_token")
+
+# 🔐 从云端后台的安全 Secrets 自动读取默认值，防止跨用户泄露
+default_read_token = st.secrets.get("READ_TOKEN", "")
+default_write_token = st.secrets.get("WRITE_TOKEN", "")
+
+read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value=default_read_token, type="password", key="read_token")
+write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value=default_write_token, type="password", key="write_token")
 target_table_name = st.sidebar.text_input("🎯 目标写入表名", value=ls.get("target_table", "Table1"), key="target_table_name")
 
 st.sidebar.markdown("---")
@@ -197,7 +206,7 @@ if st.sidebar.button("🔄 连接并获取表结构", type="primary", use_contai
             st.sidebar.error(f"❌ 连接失败: {e}")
             st.session_state.connected = False
 
-st.markdown("<h1 style='text-align: center; color: #333;'>📊 数据流转中台</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #333;'>📊 企业级数据流转中台</h1>", unsafe_allow_html=True)
 
 if st.session_state.connected:
     
@@ -257,7 +266,7 @@ if st.session_state.connected:
     for v in range(st.session_state.num_vlookups):
         lv = loaded_vlookups[v] if v < len(loaded_vlookups) else {}
         r_cols = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5])
-        with r_cols[0]: v_token = st.text_input(f"vtok_{v}", value="", type="password", key=f"vtok_{v}", label_visibility="collapsed") # ⚠️ 不加载密码
+        with r_cols[0]: v_token = st.text_input(f"vtok_{v}", value="", type="password", key=f"vtok_{v}", label_visibility="collapsed")
         with r_cols[1]: v_table = st.text_input(f"vtbl_{v}", value=lv.get("table", ""), key=f"vtbl_{v}", placeholder="输入外部表名", label_visibility="collapsed")
         with r_cols[2]: v_main_key = st.text_input(f"vmk_{v}", value=lv.get("main_key", ""), key=f"vmk_{v}", placeholder="如: 订单号", label_visibility="collapsed")
         with r_cols[3]: v_ref_key = st.text_input(f"vrk_{v}", value=lv.get("ref_key", ""), key=f"vrk_{v}", placeholder="如: 单号", label_visibility="collapsed")
