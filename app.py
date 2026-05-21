@@ -170,7 +170,7 @@ if st.sidebar.button("🔄 连接并获取表结构", type="primary", use_contai
             st.sidebar.error(f"❌ 连接失败: {e}")
             st.session_state.connected = False
 
-st.markdown("<h1 style='text-align: center; color: #333;'>📊 企业级数据流转中台</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #333;'>📊 数据流转中台</h1>", unsafe_allow_html=True)
 
 if st.session_state.connected:
     
