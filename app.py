@@ -11,7 +11,35 @@ import os
 st.set_page_config(page_title="数据流转中台", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 存储引擎 (本地 JSON)
+# 🛡️ 网页安全密码锁
+# ==========================================
+# 在这里设置你的团队专属密码
+TEAM_PASSWORD = "solohour2026" 
+
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        st.markdown("<h2 style='text-align: center; margin-top: 100px;'>🔒 内部数据中台 - 请输入访问密码</h2>", unsafe_allow_html=True)
+        pwd_col1, pwd_col2, pwd_col3 = st.columns([1, 1, 1])
+        with pwd_col2:
+            input_pwd = st.text_input("密码", type="password", label_visibility="collapsed")
+            if st.button("登录系统", use_container_width=True):
+                if input_pwd == TEAM_PASSWORD:
+                    st.session_state["password_correct"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ 密码错误，请重试！")
+        return False
+    return True
+
+# 如果密码不对，直接阻断下方所有代码运行
+if not check_password():
+    st.stop()
+
+# ==========================================
+# 存储引擎 (本地 JSON) - 🛡️ 已剥离敏感信息
 # ==========================================
 CONFIG_FILE = "seatable_etl_config.json"
 
@@ -32,8 +60,7 @@ if 'db_config' not in st.session_state:
 
 def get_current_state():
     state = {
-        "read_token": st.session_state.get("read_token", ""),
-        "write_token": st.session_state.get("write_token", ""),
+        # ⚠️ 安全警告：绝对不要在这里保存 read_token 和 write_token！
         "target_table": st.session_state.get("target_table_name", "Table1"),
         "table_names": [st.session_state.get(f"tbl_input_{i}", "") for i in range(st.session_state.num_tables)],
         "mappings": [],
@@ -47,7 +74,7 @@ def get_current_state():
         state["mappings"].append(m_dict)
     for v in range(st.session_state.num_vlookups):
         state["vlookups"].append({
-            "token": st.session_state.get(f"vtok_{v}", ""),
+            # ⚠️ 不保存外部 Token
             "table": st.session_state.get(f"vtbl_{v}", ""),
             "main_key": st.session_state.get(f"vmk_{v}", ""),
             "ref_key": st.session_state.get(f"vrk_{v}", ""),
@@ -130,14 +157,14 @@ if st.sidebar.button("💾 存档当前配置", use_container_width=True):
     if new_tpl_name.strip():
         st.session_state.db_config["templates"][new_tpl_name.strip()] = get_current_state()
         save_config(st.session_state.db_config)
-        st.sidebar.success("🎉 配置存档成功！")
+        st.sidebar.success("🎉 配置存档成功！(已过滤所有敏感 Token)")
         time.sleep(0.5)
         st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔌 API 核心配置")
-read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value=ls.get("read_token", ""), type="password", key="read_token")
-write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value=ls.get("write_token", ""), type="password", key="write_token")
+read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value="", type="password", key="read_token")
+write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value="", type="password", key="write_token")
 target_table_name = st.sidebar.text_input("🎯 目标写入表名", value=ls.get("target_table", "Table1"), key="target_table_name")
 
 st.sidebar.markdown("---")
@@ -230,7 +257,7 @@ if st.session_state.connected:
     for v in range(st.session_state.num_vlookups):
         lv = loaded_vlookups[v] if v < len(loaded_vlookups) else {}
         r_cols = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5])
-        with r_cols[0]: v_token = st.text_input(f"vtok_{v}", value=lv.get("token", ""), type="password", key=f"vtok_{v}", label_visibility="collapsed")
+        with r_cols[0]: v_token = st.text_input(f"vtok_{v}", value="", type="password", key=f"vtok_{v}", label_visibility="collapsed") # ⚠️ 不加载密码
         with r_cols[1]: v_table = st.text_input(f"vtbl_{v}", value=lv.get("table", ""), key=f"vtbl_{v}", placeholder="输入外部表名", label_visibility="collapsed")
         with r_cols[2]: v_main_key = st.text_input(f"vmk_{v}", value=lv.get("main_key", ""), key=f"vmk_{v}", placeholder="如: 订单号", label_visibility="collapsed")
         with r_cols[3]: v_ref_key = st.text_input(f"vrk_{v}", value=lv.get("ref_key", ""), key=f"vrk_{v}", placeholder="如: 单号", label_visibility="collapsed")
