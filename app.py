@@ -11,7 +11,7 @@ import os
 st.set_page_config(page_title="数据流转中台", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 🛡️ 网页安全密码锁 (云端 Secrets 加密版)
+# 🛡️ 网页安全密码锁
 # ==========================================
 TEAM_PASSWORD = st.secrets.get("WEB_PASSWORD", "PROTECTED_STREAMLIT_APP_LOCK_999")
 
@@ -37,17 +37,17 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# ☁️ 云端存储引擎 (SeaTable 强力驱动版)
+# ☁️ 云端存储引擎 (控制面 - 仅使用专属 CONFIG_TOKEN)
 # ==========================================
 TEMPLATE_TABLE_NAME = "系统配置模板表"
 
 def load_templates_from_seatable():
-    """从 SeaTable 数据库中拉取所有持久化配置模板"""
-    write_token = st.secrets.get("WRITE_TOKEN", "")
-    if not write_token:
+    """使用独立配置 Token 从 SeaTable 数据库中拉取模板"""
+    config_token = st.secrets.get("CONFIG_TOKEN", "")
+    if not config_token:
         return {}
     try:
-        base = Base(write_token, 'https://cloud.seatable.cn')
+        base = Base(config_token, 'https://cloud.seatable.cn')
         base.auth()
         rows = base.list_rows(TEMPLATE_TABLE_NAME)
         templates = {}
@@ -63,16 +63,15 @@ def load_templates_from_seatable():
         return {}
 
 def save_template_to_seatable(template_name, state_data):
-    """将当前配置作为模板永久写入 SeaTable 数据库"""
-    write_token = st.secrets.get("WRITE_TOKEN", "")
-    if not write_token:
-        st.error("❌ 未在 Secrets 中配置 WRITE_TOKEN，无法保存到 SeaTable")
+    """使用独立配置 Token 将模板永久写入 SeaTable 数据库"""
+    config_token = st.secrets.get("CONFIG_TOKEN", "")
+    if not config_token:
+        st.error("❌ 未在 Secrets 中配置 CONFIG_TOKEN，无法连接模板中心")
         return False
     try:
-        base = Base(write_token, 'https://cloud.seatable.cn')
+        base = Base(config_token, 'https://cloud.seatable.cn')
         base.auth()
         
-        # 扫描是否存在同名模板
         rows = base.list_rows(TEMPLATE_TABLE_NAME)
         existing_row_id = None
         for row in rows:
@@ -94,13 +93,14 @@ def save_template_to_seatable(template_name, state_data):
         st.error(f"❌ 模板写入 SeaTable 失败: {e}")
         return False
 
-# 初始化加载云端模板库到 Session 缓存中
+# 初始化加载云端模板库
 if 'cloud_templates' not in st.session_state:
     with st.spinner("正在同步 SeaTable 云端配置中心..."):
         st.session_state.cloud_templates = load_templates_from_seatable()
 
 def get_current_state():
     state = {
+        # 注意：这里依然不保存业务 Token，彻底切断泄露隐患
         "target_table": st.session_state.get("target_table_name", "Table1"),
         "table_names": [st.session_state.get(f"tbl_input_{i}", "") for i in range(st.session_state.num_tables)],
         "mappings": [],
@@ -137,7 +137,7 @@ def apply_state(state):
     st.session_state.loaded_state = state
 
 # ==========================================
-# API 核心交互工具
+# API 核心交互工具 (数据面)
 # ==========================================
 @st.cache_resource
 def get_base_client(token, server_url='https://cloud.seatable.cn'):
@@ -191,7 +191,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("### 💾 云端配置中心 (已打通数据库)")
+st.sidebar.markdown("### 💾 云端配置中心")
 template_names = ["-- 选择云端配置模板 --"] + list(st.session_state.cloud_templates.keys())
 selected_tpl = st.sidebar.selectbox("读取模板", template_names, label_visibility="collapsed")
 if st.sidebar.button("📂 载入所选云端配置", use_container_width=True):
@@ -210,13 +210,11 @@ if st.sidebar.button("📤 备份当前配置至云端", use_container_width=Tru
             st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔌 API 核心配置")
+st.sidebar.markdown("### 🔌 API 核心配置 (临时流转)")
 
-default_read_token = st.secrets.get("READ_TOKEN", "")
-default_write_token = st.secrets.get("WRITE_TOKEN", "")
-
-read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value=default_read_token, type="password", key="read_token")
-write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value=default_write_token, type="password", key="write_token")
+# ⚠️ 这里彻底清空默认值，要求用户根据不同的业务临时输入 Token
+read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value="", type="password", key="read_token", placeholder="粘贴源 Base 的 Token")
+write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value="", type="password", key="write_token", placeholder="粘贴目标 Base 的 Token")
 target_table_name = st.sidebar.text_input("🎯 目标写入表名", value=ls.get("target_table", "Table1"), key="target_table_name")
 
 st.sidebar.markdown("---")
@@ -234,18 +232,21 @@ col_btn2.button("➖ 源表", on_click=remove_table, use_container_width=True)
 
 st.sidebar.markdown("<br>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 连接并获取表结构", type="primary", use_container_width=True):
-    with st.spinner("正在扫描数据库列结构..."):
-        try:
-            base_read = get_base_client(read_token)
-            st.session_state.table_cols = {}
-            for t_name in table_names:
-                cols_info = base_read.list_columns(t_name)
-                st.session_state.table_cols[t_name] = [c['name'] for c in cols_info]
-            st.session_state.connected = True
-            st.sidebar.success("✅ 连接通道建立成功！")
-        except Exception as e:
-            st.sidebar.error(f"❌ 连接失败: {e}")
-            st.session_state.connected = False
+    if not read_token:
+        st.sidebar.error("⚠️ 请先输入读取 Token！")
+    else:
+        with st.spinner("正在扫描数据库列结构..."):
+            try:
+                base_read = get_base_client(read_token)
+                st.session_state.table_cols = {}
+                for t_name in table_names:
+                    cols_info = base_read.list_columns(t_name)
+                    st.session_state.table_cols[t_name] = [c['name'] for c in cols_info]
+                st.session_state.connected = True
+                st.sidebar.success("✅ 连接通道建立成功！")
+            except Exception as e:
+                st.sidebar.error(f"❌ 连接失败: {e}")
+                st.session_state.connected = False
 
 st.markdown("<h1 style='text-align: center; color: #333;'>📊 数据流转中台</h1>", unsafe_allow_html=True)
 
@@ -307,7 +308,7 @@ if st.session_state.connected:
     for v in range(st.session_state.num_vlookups):
         lv = loaded_vlookups[v] if v < len(loaded_vlookups) else {}
         r_cols = st.columns([1.5, 1.5, 1.5, 1.5, 1.5, 1.5])
-        with r_cols[0]: v_token = st.text_input(f"vtok_{v}", value="", type="password", key=f"vtok_{v}", label_visibility="collapsed")
+        with r_cols[0]: v_token = st.text_input(f"vtok_{v}", value="", type="password", key=f"vtok_{v}", label_visibility="collapsed", placeholder="同源数据请留空")
         with r_cols[1]: v_table = st.text_input(f"vtbl_{v}", value=lv.get("table", ""), key=f"vtbl_{v}", placeholder="输入外部表名", label_visibility="collapsed")
         with r_cols[2]: v_main_key = st.text_input(f"vmk_{v}", value=lv.get("main_key", ""), key=f"vmk_{v}", placeholder="如: 订单号", label_visibility="collapsed")
         with r_cols[3]: v_ref_key = st.text_input(f"vrk_{v}", value=lv.get("ref_key", ""), key=f"vrk_{v}", placeholder="如: 单号", label_visibility="collapsed")
@@ -381,6 +382,8 @@ if st.session_state.connected:
     if st.button("▶️ 启动流转引擎并回写线上数据", type="primary", use_container_width=True):
         if not mappings:
             st.warning("⚠️ 请配置至少一条基础数据合并规则。")
+        elif not read_token or not write_token:
+            st.warning("⚠️ 请确保左侧【API 核心配置】中的读取与写入 Token 均已填写！")
         else:
             with st.container():
                 try:
