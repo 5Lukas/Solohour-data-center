@@ -2,17 +2,16 @@ import streamlit as st
 from seatable_api import Base
 from seatable_api.constants import ColumnTypes
 import pandas as pd
-import numpy as np  
+import numpy as np
 import io
-import time  
+import time
 import json
 import os
-import xlsxwriter
 
-st.set_page_config(page_title="数据处理中台", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="数据流转中台", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 本地配置存储引擎
+# 存储引擎 (本地 JSON)
 # ==========================================
 CONFIG_FILE = "seatable_etl_config.json"
 
@@ -21,8 +20,7 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
-            return {"templates": {}, "last_used": {}}
+        except: return {"templates": {}, "last_used": {}}
     return {"templates": {}, "last_used": {}}
 
 def save_config(data):
@@ -47,7 +45,6 @@ def get_current_state():
         for idx in range(st.session_state.num_tables):
             m_dict["sources"][idx] = st.session_state.get(f"map_{m}_tbl_{idx}", "-- 不选 --")
         state["mappings"].append(m_dict)
-        
     for v in range(st.session_state.num_vlookups):
         state["vlookups"].append({
             "token": st.session_state.get(f"vtok_{v}", ""),
@@ -57,7 +54,6 @@ def get_current_state():
             "pull_col": st.session_state.get(f"vpc_{v}", ""),
             "out_name": st.session_state.get(f"vout_{v}", "")
         })
-        
     for t in range(st.session_state.num_transforms):
         state["transforms"].append({
             "target_col": st.session_state.get(f"tcol_{t}", ""),
@@ -72,10 +68,10 @@ def apply_state(state):
     st.session_state.num_mappings = max(1, len(state.get("mappings", [])))
     st.session_state.num_vlookups = max(0, len(state.get("vlookups", [])))
     st.session_state.num_transforms = max(0, len(state.get("transforms", [])))
-    st.session_state.loaded_state = state 
+    st.session_state.loaded_state = state
 
 # ==========================================
-# 基础工具函数
+# API 核心交互工具
 # ==========================================
 @st.cache_resource
 def get_base_client(token, server_url='https://cloud.seatable.cn'):
@@ -85,26 +81,21 @@ def get_base_client(token, server_url='https://cloud.seatable.cn'):
 
 def get_all_rows_safely(base_client, table_name):
     all_rows = []
-    start = 0; limit = 1000; max_retries = 3 
+    start = 0; limit = 1000
     while True:
-        for attempt in range(max_retries):
-            try:
-                rows = base_client.list_rows(table_name, start=start, limit=limit)
-                break 
-            except Exception as e:
-                if "503" in str(e) or attempt < max_retries - 1: time.sleep(2) 
-                else: raise e 
-        if not rows: break
-        all_rows.extend(rows)
-        start += limit
-        time.sleep(0.2) 
+        try:
+            rows = base_client.list_rows(table_name, start=start, limit=limit)
+            if not rows: break
+            all_rows.extend(rows)
+            start += limit
+            time.sleep(0.1)
+        except: break
     return all_rows
 
 # ==========================================
-# 状态初始化
+# 全局状态初始化
 # ==========================================
 if 'connected' not in st.session_state: st.session_state.connected = False
-if 'table_cols' not in st.session_state: st.session_state.table_cols = {}
 if 'num_tables' not in st.session_state: st.session_state.num_tables = 2
 if 'num_mappings' not in st.session_state: st.session_state.num_mappings = 3
 if 'num_vlookups' not in st.session_state: st.session_state.num_vlookups = 1
@@ -122,28 +113,10 @@ def remove_transform(): st.session_state.num_transforms = max(0, st.session_stat
 ls = st.session_state.get("loaded_state", st.session_state.db_config.get("last_used", {}))
 
 # ==========================================
-# UI 样式注入
+# 前端 UI 与排版渲染
 # ==========================================
-st.markdown(\"""
-<style>
-    .step-header {
-        padding: 10px 15px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 1.2rem;
-        margin-bottom: 15px;
-        color: #333;
-    }
-    .bg-merge { background-color: #E3F2FD; border-left: 5px solid #2196F3; }
-    .bg-vlookup { background-color: #E8F5E9; border-left: 5px solid #4CAF50; }
-    .bg-transform { background-color: #FFF3E0; border-left: 5px solid #FF9800; }
-    .bg-execute { background-color: #F3E5F5; border-left: 5px solid #9C27B0; }
-</style>
-\""", unsafe_allow_html=True)
+st.markdown("<style>.step-header { padding: 10px 15px; border-radius: 8px; font-weight: 600; font-size: 1.2rem; margin: 15px 0 10px 0; color: #333; } .bg-merge { background-color: #E3F2FD; border-left: 5px solid #2196F3; } .bg-vlookup { background-color: #E8F5E9; border-left: 5px solid #4CAF50; } .bg-transform { background-color: #FFF3E0; border-left: 5px solid #FF9800; } .bg-execute { background-color: #F3E5F5; border-left: 5px solid #9C27B0; }</style>", unsafe_allow_html=True)
 
-# ==========================================
-# 侧边栏：配置与数据源
-# ==========================================
 st.sidebar.markdown("### 💾 配置存档中心")
 template_names = ["-- 选择配置模板 --"] + list(st.session_state.db_config["templates"].keys())
 selected_tpl = st.sidebar.selectbox("读取模板", template_names, label_visibility="collapsed")
@@ -163,14 +136,12 @@ if st.sidebar.button("💾 存档当前配置", use_container_width=True):
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔌 API 核心配置")
-
 read_token = st.sidebar.text_input("🔑 读取 Token (源数据)", value=ls.get("read_token", ""), type="password", key="read_token")
 write_token = st.sidebar.text_input("🔑 写入 Token (目标表)", value=ls.get("write_token", ""), type="password", key="write_token")
-target_table_name = st.sidebar.text_input("🎯 目标写入表名", value=ls.get("target_table", "Table1"), key="target_table_name") 
+target_table_name = st.sidebar.text_input("🎯 目标写入表名", value=ls.get("target_table", "Table1"), key="target_table_name")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📁 数据源表配置")
-
 table_names = []
 loaded_tables = ls.get("table_names", ["TK-ID-01-ALLORDER", "SP-ID-01-ALLORDER"])
 for i in range(st.session_state.num_tables):
@@ -199,11 +170,7 @@ if st.sidebar.button("🔄 连接并获取表结构", type="primary", use_contai
             st.sidebar.error(f"❌ 连接失败: {e}")
             st.session_state.connected = False
 
-# ==========================================
-# 主界面
-# ==========================================
 st.markdown("<h1 style='text-align: center; color: #333;'>📊 企业级数据流转中台</h1>", unsafe_allow_html=True)
-st.write("")
 
 if st.session_state.connected:
     
@@ -211,7 +178,6 @@ if st.session_state.connected:
     # 步骤一：数据合并
     # ----------------=====================================================
     st.markdown("<div class='step-header bg-merge'>🧬 步骤 1：多源数据纵向合并</div>", unsafe_allow_html=True)
-    
     num_cols = len(table_names) + 1
     ui_cols = st.columns(num_cols)
     for idx, t_name in enumerate(table_names): ui_cols[idx].write(f"📥 **来源: {t_name}**")
@@ -248,9 +214,7 @@ if st.session_state.connected:
     # ----------------=====================================================
     # 步骤二：跨表匹配 (VLOOKUP)
     # ----------------=====================================================
-    st.write("")
     st.markdown("<div class='step-header bg-vlookup'>🔗 步骤 2：跨表数据关联匹配 (VLOOKUP)</div>", unsafe_allow_html=True)
-
     vlookup_rules = []
     loaded_vlookups = ls.get("vlookups", [])
 
@@ -288,11 +252,9 @@ if st.session_state.connected:
     col_v2.button("➖ 移除匹配规则", on_click=remove_vlookup, use_container_width=True)
 
     # ----------------=====================================================
-    # 步骤三：本表列清洗换算
+    # 步骤三：本表清洗
     # ----------------=====================================================
-    st.write("")
     st.markdown("<div class='step-header bg-transform'>🛠️ 步骤 3：列数据清洗与汇率换算</div>", unsafe_allow_html=True)
-
     TRANSFORM_MODES = ["📅 日期格式化 (YYYY/MM/DD)", "💱 汇率除法换算"]
     transform_rules = []
     loaded_transforms = ls.get("transforms", [])
@@ -310,18 +272,15 @@ if st.session_state.connected:
         
         with r_cols[0]:
             t_col = st.text_input(f"tcol_{t}", value=lt.get("target_col", ""), key=f"tr_col_{t}", placeholder="如: 下单时间 / 金额", label_visibility="collapsed")
-            
         with r_cols[1]:
             mode_val = lt.get("mode", TRANSFORM_MODES[0])
             mode_idx = TRANSFORM_MODES.index(mode_val) if mode_val in TRANSFORM_MODES else 0
             t_mode = st.selectbox(f"tmode_{t}", TRANSFORM_MODES, index=mode_idx, key=f"tr_mode_{t}", label_visibility="collapsed")
-            
         with r_cols[2]:
             if "汇率" in t_mode:
                 t_rate = st.text_input(f"trate_{t}", value=lt.get("rate_val", "1.0"), key=f"tr_rate_{t}", placeholder="填入数字, 如: 7.2", label_visibility="collapsed")
             else:
                 t_rate = st.text_input(f"trate_{t}", value="-", disabled=True, key=f"tr_rate_{t}", label_visibility="collapsed")
-                
         with r_cols[3]:
             t_out = st.text_input(f"tout_{t}", value=lt.get("out_name", ""), key=f"tr_out_{t}", placeholder="填入最终列名", label_visibility="collapsed")
             
@@ -340,7 +299,6 @@ if st.session_state.connected:
     # ----------------=====================================================
     # 步骤四：执行流转
     # ----------------=====================================================
-    st.write("")
     st.markdown("<div class='step-header bg-execute'>🚀 步骤 4：全局执行中枢</div>", unsafe_allow_html=True)
     
     if st.button("▶️ 启动流转引擎并回写线上数据", type="primary", use_container_width=True):
@@ -395,17 +353,14 @@ if st.session_state.connected:
                         for rule in transform_rules:
                             t_col = rule["target_col"]
                             out_col = rule["out_name"]
-                            if t_col not in df_final.columns:
-                                df_final[t_col] = ""
+                            if t_col not in df_final.columns: df_final[t_col] = ""
                                 
                             if "日期" in rule["mode"]:
-                                # 【核心修复】：使用 apply 逐行解析，解决多数据源格式混合导致 Pandas 猜测失败变空值的问题
                                 def safe_parse_date(d):
                                     val = str(d).strip()
                                     if val in ('', 'nan', 'None', 'NaT'): return pd.NaT
                                     try: return pd.to_datetime(val)
                                     except: return pd.NaT
-                                
                                 parsed_date = df_final[t_col].apply(safe_parse_date)
                                 df_final[out_col] = parsed_date.dt.strftime('%Y/%m/%d').fillna("")
                                 
