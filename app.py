@@ -37,24 +37,67 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# 存储引擎 (本地 JSON) - 已隔离敏感 Token 存储
+# ☁️ 云端存储引擎 (SeaTable 强力驱动版)
 # ==========================================
-CONFIG_FILE = "seatable_etl_config.json"
+TEMPLATE_TABLE_NAME = "系统配置模板表"
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: return {"templates": {}, "last_used": {}}
-    return {"templates": {}, "last_used": {}}
+def load_templates_from_seatable():
+    """从 SeaTable 数据库中拉取所有持久化配置模板"""
+    write_token = st.secrets.get("WRITE_TOKEN", "")
+    if not write_token:
+        return {}
+    try:
+        base = Base(write_token, 'https://cloud.seatable.cn')
+        base.auth()
+        rows = base.list_rows(TEMPLATE_TABLE_NAME)
+        templates = {}
+        for row in rows:
+            name = row.get('模板名称')
+            config_str = row.get('配置数据')
+            if name and config_str:
+                try:
+                    templates[name] = json.loads(config_str)
+                except: pass
+        return templates
+    except:
+        return {}
 
-def save_config(data):
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def save_template_to_seatable(template_name, state_data):
+    """将当前配置作为模板永久写入 SeaTable 数据库"""
+    write_token = st.secrets.get("WRITE_TOKEN", "")
+    if not write_token:
+        st.error("❌ 未在 Secrets 中配置 WRITE_TOKEN，无法保存到 SeaTable")
+        return False
+    try:
+        base = Base(write_token, 'https://cloud.seatable.cn')
+        base.auth()
+        
+        # 扫描是否存在同名模板
+        rows = base.list_rows(TEMPLATE_TABLE_NAME)
+        existing_row_id = None
+        for row in rows:
+            if row.get('模板名称') == template_name:
+                existing_row_id = row.get('_id')
+                break
+                
+        row_data = {
+            '模板名称': template_name,
+            '配置数据': json.dumps(state_data, ensure_ascii=False, indent=4)
+        }
+        
+        if existing_row_id:
+            base.update_row(TEMPLATE_TABLE_NAME, existing_row_id, row_data)
+        else:
+            base.append_row(TEMPLATE_TABLE_NAME, row_data)
+        return True
+    except Exception as e:
+        st.error(f"❌ 模板写入 SeaTable 失败: {e}")
+        return False
 
-if 'db_config' not in st.session_state:
-    st.session_state.db_config = load_config()
+# 初始化加载云端模板库到 Session 缓存中
+if 'cloud_templates' not in st.session_state:
+    with st.spinner("正在同步 SeaTable 云端配置中心..."):
+        st.session_state.cloud_templates = load_templates_from_seatable()
 
 def get_current_state():
     state = {
@@ -133,7 +176,7 @@ def remove_vlookup(): st.session_state.num_vlookups = max(0, st.session_state.nu
 def add_transform(): st.session_state.num_transforms += 1
 def remove_transform(): st.session_state.num_transforms = max(0, st.session_state.num_transforms - 1)
 
-ls = st.session_state.get("loaded_state", st.session_state.db_config.get("last_used", {}))
+ls = st.session_state.get("loaded_state", {})
 
 # ==========================================
 # 前端 UI 与排版渲染
@@ -148,27 +191,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("### 💾 配置存档中心")
-template_names = ["-- 选择配置模板 --"] + list(st.session_state.db_config["templates"].keys())
+st.sidebar.markdown("### 💾 云端配置中心 (已打通数据库)")
+template_names = ["-- 选择云端配置模板 --"] + list(st.session_state.cloud_templates.keys())
 selected_tpl = st.sidebar.selectbox("读取模板", template_names, label_visibility="collapsed")
-if st.sidebar.button("📂 载入所选配置", use_container_width=True):
-    if selected_tpl != "-- 选择配置模板 --":
-        apply_state(st.session_state.db_config["templates"][selected_tpl])
+if st.sidebar.button("📂 载入所选云端配置", use_container_width=True):
+    if selected_tpl != "-- 选择云端配置模板 --":
+        apply_state(st.session_state.cloud_templates[selected_tpl])
         st.rerun()
 
-new_tpl_name = st.sidebar.text_input("将当前配置保存为模板", placeholder="输入专属模板名称...")
-if st.sidebar.button("💾 存档当前配置", use_container_width=True):
+new_tpl_name = st.sidebar.text_input("将当前配置作为新模板上传", placeholder="输入专属模板名称...")
+if st.sidebar.button("📤 备份当前配置至云端", use_container_width=True):
     if new_tpl_name.strip():
-        st.session_state.db_config["templates"][new_tpl_name.strip()] = get_current_state()
-        save_config(st.session_state.db_config)
-        st.sidebar.success("🎉 配置存档成功！(已隔离敏感 Token)")
-        time.sleep(0.5)
-        st.rerun()
+        success = save_template_to_seatable(new_tpl_name.strip(), get_current_state())
+        if success:
+            st.session_state.cloud_templates = load_templates_from_seatable()
+            st.sidebar.success("🎉 模板已永久同步至 SeaTable！")
+            time.sleep(0.5)
+            st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔌 API 核心配置")
 
-# 🔐 从云端后台的安全 Secrets 自动读取默认值，防止跨用户泄露
 default_read_token = st.secrets.get("READ_TOKEN", "")
 default_write_token = st.secrets.get("WRITE_TOKEN", "")
 
@@ -200,8 +243,6 @@ if st.sidebar.button("🔄 连接并获取表结构", type="primary", use_contai
                 st.session_state.table_cols[t_name] = [c['name'] for c in cols_info]
             st.session_state.connected = True
             st.sidebar.success("✅ 连接通道建立成功！")
-            st.session_state.db_config["last_used"] = get_current_state()
-            save_config(st.session_state.db_config)
         except Exception as e:
             st.sidebar.error(f"❌ 连接失败: {e}")
             st.session_state.connected = False
@@ -341,9 +382,6 @@ if st.session_state.connected:
         if not mappings:
             st.warning("⚠️ 请配置至少一条基础数据合并规则。")
         else:
-            st.session_state.db_config["last_used"] = get_current_state()
-            save_config(st.session_state.db_config)
-            
             with st.container():
                 try:
                     base_read = get_base_client(read_token)
